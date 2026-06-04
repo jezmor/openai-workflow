@@ -70,18 +70,18 @@ function markdownImage(path) {
   return `${promptMarkdown}\n${imageMarkdown}`
 }
 
+function writeFile(path, text) {
+  $(text).writeToFileAtomicallyEncodingError(path, true, $.NSUTF8StringEncoding, undefined)
+}
+
 // Main
 function run(argv) {
   const typedQuery = argv[0]
   const maxEntries = 10
-  const apiKey = envVar("openai_api_key")
-  const apiOrgHeader = envVar("openai_org_id") ? ["--header", `OpenAI-Organization: ${envVar("openai_org_id")}`] : []
-  const apiEndpointInit = envVar("dalle_api_endpoint") || "https://api.openai.com/v1/images/generations"
-  const apiEndpointInitHasPath = apiEndpointInit.replace(/^https?:\/\//, "").includes("/")
-  const apiEndpoint = apiEndpointInitHasPath ? apiEndpointInit : `${apiEndpointInit}/v1/images/generations`
-  const model = envVar("dalle_model")
-  const imageStyle = envVar("dalle_style")
-  const imageQuality = envVar("dalle_quality")
+  const region = envVar("aws_region") || "us-east-1"
+  const profile = envVar("aws_profile") || ""
+  const model = envVar("image_model") || "amazon.nova-canvas-v1:0"
+  const imageQuality = envVar("image_quality") || "standard"
   const parentFolder = envVar("dalle_images_folder")
   const includeMetadata = envVar("dalle_write_metadata")
 
@@ -110,70 +110,144 @@ function run(argv) {
     behaviour: { scroll: "end" }
   })
 
-  // Send request
+  // Build request body based on model
+  let requestBody
+  if (model.startsWith("stability.")) {
+    // Stability AI models on Bedrock
+    requestBody = JSON.stringify({
+      text_prompts: [{ text: typedQuery, weight: 1.0 }],
+      cfg_scale: 8,
+      steps: 50,
+      width: 1024,
+      height: 1024
+    })
+  } else {
+    // Amazon Nova Canvas (default)
+    const dimensions = imageQuality === "hd" ?
+      { width: 2048, height: 2048 } :
+      { width: 1024, height: 1024 }
+
+    requestBody = JSON.stringify({
+      taskType: "TEXT_IMAGE",
+      textToImageParams: {
+        text: typedQuery
+      },
+      imageGenerationConfig: {
+        numberOfImages: 1,
+        quality: imageQuality,
+        width: dimensions.width,
+        height: dimensions.height,
+        cfgScale: 8.0
+      }
+    })
+  }
+
+  // Write body to temp file
+  const cacheDir = envVar("alfred_workflow_cache")
+  makeDir(cacheDir)
+  const bodyFile = `${cacheDir}/image_body.json`
+  const outputFile = `${cacheDir}/image_response.json`
+  writeFile(bodyFile, requestBody)
+
+  // Call Bedrock invoke-model via AWS CLI
+  const profileArg = profile ? `--profile ${profile}` : ""
   const task = $.NSTask.alloc.init
   const stdout = $.NSPipe.pipe
+  const stderr = $.NSPipe.pipe
 
-  task.executableURL = $.NSURL.fileURLWithPath("/usr/bin/curl")
-  task.arguments = [
-    apiEndpoint,
-    "--silent",
-    "--header", "Content-Type: application/json",
-    "--header", `Authorization: Bearer ${apiKey}`,
-    "--data", JSON.stringify({
-      model: model,
-      prompt: typedQuery,
-      style: imageStyle,
-      quality: imageQuality,
-      size: "1024x1024"
-    })
-  ].concat(apiOrgHeader)
-
+  task.executableURL = $.NSURL.fileURLWithPath("/bin/zsh")
+  task.arguments = ["-c", `export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:$PATH" && aws bedrock-runtime invoke-model ${profileArg} --region ${region} --model-id "${model}" --content-type "application/json" --accept "application/json" --body file://${bodyFile} ${outputFile} 2>&1`]
   task.standardOutput = stdout
+  task.standardError = stderr
   task.launchAndReturnError(false)
+  task.waitUntilExit
 
-  const dataOut = stdout.fileHandleForReading.readDataToEndOfFileAndReturnError(false)
-  const stringOut = $.NSString.alloc.initWithDataEncoding(dataOut, $.NSUTF8StringEncoding).js
-  const response = JSON.parse(stringOut)
+  const stderrData = stdout.fileHandleForReading.readDataToEndOfFileAndReturnError(false)
+  const stderrStr = $.NSString.alloc.initWithDataEncoding(stderrData, $.NSUTF8StringEncoding).js
 
-  // Warn on error
-  if (response["error"]) {
-    console.log(JSON.stringify(response)) // For Alfred's debugger
+  // Check for CLI errors
+  if (task.terminationStatus !== 0) {
+    const errorMsg = stderrStr || "Unknown error calling AWS Bedrock"
+    // Clean up
+    $.NSFileManager.defaultManager.removeItemAtPathError(bodyFile, undefined)
+    $.NSFileManager.defaultManager.removeItemAtPathError(outputFile, undefined)
 
     return JSON.stringify({
       variables: { loaded_previous: true },
-      response: `${previousEntries}\n\n**Original Prompt:** ${typedQuery}\n\n${response["error"]["message"]}`,
+      response: `${previousEntries}\n\n**Prompt:** ${typedQuery}\n\n⚠️ ${errorMsg}`,
       behaviour: { response: "append", scroll: "end" }
     })
   }
 
-  // Download images
-  const creationDate = new Date(response["created"] * 1000) // Multiply to get milliseconds
+  // Read response
+  const responseData = $.NSString.stringWithContentsOfFileEncodingError(outputFile, $.NSUTF8StringEncoding, undefined).js
+  // Clean up temp files
+  $.NSFileManager.defaultManager.removeItemAtPathError(bodyFile, undefined)
+  $.NSFileManager.defaultManager.removeItemAtPathError(outputFile, undefined)
+
+  let response
+  try {
+    response = JSON.parse(responseData)
+  } catch(e) {
+    return JSON.stringify({
+      variables: { loaded_previous: true },
+      response: `${previousEntries}\n\n**Prompt:** ${typedQuery}\n\n⚠️ Failed to parse response: ${responseData}`,
+      behaviour: { response: "append", scroll: "end" }
+    })
+  }
+
+  // Check for error in response
+  if (response["error"] || response["message"]) {
+    const errorMsg = response["error"] || response["message"]
+    return JSON.stringify({
+      variables: { loaded_previous: true },
+      response: `${previousEntries}\n\n**Prompt:** ${typedQuery}\n\n⚠️ ${errorMsg}`,
+      behaviour: { response: "append", scroll: "end" }
+    })
+  }
+
+  // Extract base64 images from response
+  let base64Images = []
+
+  if (model.startsWith("stability.")) {
+    // Stability AI response format
+    base64Images = (response["artifacts"] || []).map(a => a["base64"])
+  } else {
+    // Amazon Nova Canvas response format
+    base64Images = response["images"] || []
+  }
+
+  if (base64Images.length === 0) {
+    return JSON.stringify({
+      variables: { loaded_previous: true },
+      response: `${previousEntries}\n\n**Prompt:** ${typedQuery}\n\n⚠️ No images returned in response`,
+      behaviour: { response: "append", scroll: "end" }
+    })
+  }
+
+  // Save images
+  const creationDate = new Date()
   const creationYear = creationDate.getFullYear()
-  const creationMonth = padDate(creationDate.getMonth() + 1) // Months are zero-based
+  const creationMonth = padDate(creationDate.getMonth() + 1)
   const creationDay = padDate(creationDate.getDate())
   const creationHour = padDate(creationDate.getHours())
   const creationMinute = padDate(creationDate.getMinutes())
   const creationSecond = padDate(creationDate.getSeconds())
 
-  // Write Prompt
-  const revisedPrompt = response["data"][0]["revised_prompt"]
-  const promptText = revisedPrompt ?
-    `Original Prompt: ${typedQuery}\n\nRevised Prompt: ${revisedPrompt}` :
-    `Original Prompt: ${typedQuery}`
+  const promptText = `Original Prompt: ${typedQuery}`
 
-  // Download images
-  const downloadedImages = response["data"].map(item => {
+  const downloadedImages = base64Images.map(b64 => {
     const uid = $.NSProcessInfo.processInfo.globallyUniqueString.js.split("-")[0]
     const imagePath = `${parentFolder}/${creationYear}.${creationMonth}.${creationDay}.${creationHour}.${creationMinute}.${creationSecond}-${uid}.png`
 
-    const queryURL = $.NSURL.URLWithString(item["url"])
-    const requestData = $.NSData.dataWithContentsOfURL(queryURL)
-    requestData.writeToFileAtomically(imagePath, true)
+    // Decode base64 and write to file
+    const nsData = $.NSData.alloc.initWithBase64EncodedStringOptions(b64, 0)
+    nsData.writeToFileAtomically(imagePath, true)
 
     if (includeMetadata) {
-      writeMetadata("kMDItemCreator", "DALL-E", imagePath)
-      writeMetadata("kMDItemDescription", `Generated with DALL-E via Alfred workflow.\n\n${promptText}`, imagePath)
+      const modelName = model.startsWith("stability.") ? "Stability AI" : "Amazon Nova Canvas"
+      writeMetadata("kMDItemCreator", modelName, imagePath)
+      writeMetadata("kMDItemDescription", `Generated with ${modelName} via Alfred workflow.\n\n${promptText}`, imagePath)
     }
 
     return imagePath

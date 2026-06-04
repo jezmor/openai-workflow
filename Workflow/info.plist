@@ -3,7 +3,7 @@
 <plist version="1.0">
 <dict>
 	<key>bundleid</key>
-	<string>com.alfredapp.vitor.openai</string>
+	<string>com.alfredapp.custom.bedrock</string>
 	<key>connections</key>
 	<dict>
 		<key>002874FF-3AE4-4E8F-A4F8-65844E5D6CFB</key>
@@ -718,13 +718,13 @@
 		</array>
 	</dict>
 	<key>createdby</key>
-	<string>Vítor Galvão</string>
+	<string>Jeremy (adapted from Vítor Galvão)</string>
 	<key>description</key>
-	<string>OpenAI integrations</string>
+	<string>AWS Bedrock AI integrations</string>
 	<key>disabled</key>
 	<false/>
 	<key>name</key>
-	<string>ChatGPT / DALL-E</string>
+	<string>Bedrock Chat / Image Gen</string>
 	<key>objects</key>
 	<array>
 		<dict>
@@ -761,7 +761,7 @@
 				<key>acceptsurls</key>
 				<false/>
 				<key>name</key>
-				<string>Ask ChatGPT</string>
+				<string>Ask Bedrock</string>
 			</dict>
 			<key>type</key>
 			<string>alfred.workflow.trigger.universalaction</string>
@@ -1218,7 +1218,7 @@ kill "${pid_stream}"
 			<key>config</key>
 			<dict>
 				<key>text</key>
-				<string>Ask ChatGPT '{query}'</string>
+				<string>Ask Bedrock '{query}'</string>
 			</dict>
 			<key>type</key>
 			<string>alfred.workflow.trigger.fallback</string>
@@ -1317,7 +1317,7 @@ function run() {
 				<key>inputtype</key>
 				<integer>1</integer>
 				<key>loadingtext</key>
-				<string>Querying ChatGPT API…</string>
+				<string>Querying Bedrock API…</string>
 				<key>outputmode</key>
 				<integer>1</integer>
 				<key>scriptinput</key>
@@ -1468,7 +1468,7 @@ function run() {
 				<key>subtext</key>
 				<string>↩ Continue chat · ⌘↩ New chat · ⌥↩ Chat history</string>
 				<key>text</key>
-				<string>Ask ChatGPT</string>
+				<string>Ask Bedrock</string>
 				<key>withspace</key>
 				<true/>
 			</dict>
@@ -1676,7 +1676,7 @@ function run() {
 				<key>subtext</key>
 				<string></string>
 				<key>title</key>
-				<string>ChatGPT Chat History</string>
+				<string>Bedrock Chat History</string>
 				<key>type</key>
 				<integer>7</integer>
 				<key>withspace</key>
@@ -1853,7 +1853,7 @@ function run() {
 				<key>inputtype</key>
 				<integer>1</integer>
 				<key>loadingtext</key>
-				<string>Querying DALL·E API…</string>
+				<string>Querying Bedrock Image API…</string>
 				<key>outputmode</key>
 				<integer>0</integer>
 				<key>scriptinput</key>
@@ -1911,9 +1911,9 @@ function run() {
 				<key>skipuniversalaction</key>
 				<true/>
 				<key>subtext</key>
-				<string>Send image prompt to DALL·E</string>
+				<string>Send image prompt to Bedrock</string>
 				<key>text</key>
-				<string>Generate with DALL·E</string>
+				<string>Generate Image</string>
 				<key>withspace</key>
 				<true/>
 			</dict>
@@ -1936,20 +1936,16 @@ function run() {
 	<key>readme</key>
 	<string>## Setup
 
-1. Create an OpenAI account and [log in](https://platform.openai.com/login?launch).
-2. On the [API keys page](https://platform.openai.com/api-keys), click `+ Create new secret key`.
-3. Name your new secret key and click `Create secret key`.
-4. Copy your secret key and add it to the [Workflow’s Configuration](https://www.alfredapp.com/help/workflows/user-configuration/).
+1. Install and configure the [AWS CLI](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html).
+2. Ensure your AWS credentials are configured (`aws configure` or SSO via `aws sso login`).
+3. Make sure you have [model access enabled](https://docs.aws.amazon.com/bedrock/latest/userguide/model-access.html) in AWS Bedrock for the models you want to use.
+4. Select your AWS Region and preferred models in the [Workflow's Configuration](https://www.alfredapp.com/help/workflows/user-configuration/).
 
 ## Usage
 
-### ChatGPT
+### Chat
 
-Query ChatGPT via the `chatgpt` keyword, the [Universal Action](https://www.alfredapp.com/help/features/universal-actions/), or the [Fallback Search](https://www.alfredapp.com/help/features/default-results/fallback-searches/).
-
-![Start ChatGPT query](images/about/chatgptkeyword.png)
-
-![Querying ChatGPT](images/about/chatgpttextview.png)
+Query via the `chatgpt` keyword (configurable), the [Universal Action](https://www.alfredapp.com/help/features/universal-actions/), or the [Fallback Search](https://www.alfredapp.com/help/features/default-results/fallback-searches/).
 
 * &lt;kbd&gt;↩&lt;/kbd&gt; Ask a new question.
 * &lt;kbd&gt;⌘&lt;/kbd&gt;&lt;kbd&gt;↩&lt;/kbd&gt; Clear and start new chat.
@@ -1959,23 +1955,21 @@ Query ChatGPT via the `chatgpt` keyword, the [Universal Action](https://www.alfr
 
 #### Chat History
 
-View Chat History with ⌥↩ in the `chatgpt` keyword. Each result shows the first question as the title and the last as the subtitle.
+View Chat History with ⌥↩ in the chat keyword.
 
-![Viewing chat histories](images/about/chatgpthistory.png)
+### Image Generation
 
-&lt;kbd&gt;↩&lt;/kbd&gt; to archive the current chat and load the selected one. Older chats can be trashed with the `Delete` [Universal Action](https://www.alfredapp.com/help/features/universal-actions/). Select multiple chats with the [File Buffer](https://www.alfredapp.com/help/features/file-search/#file-buffer).
-
-### DALL·E
-
-Query DALL·E via the `dalle` keyword.
-
-![Start DALL-E query](images/about/dallekeyword.png)
-
-![Querying DALL-E](images/about/dalletextview.png)
+Generate images via the `imagine` keyword (configurable). Supports Amazon Nova Canvas and Stability AI SDXL via Bedrock.
 
 * &lt;kbd&gt;↩&lt;/kbd&gt; Send a new prompt.
 * &lt;kbd&gt;⌘&lt;/kbd&gt;&lt;kbd&gt;↩&lt;/kbd&gt; Archive images.
-* &lt;kbd&gt;⌥&lt;/kbd&gt;&lt;kbd&gt;↩&lt;/kbd&gt; Reveal last image in the Finder.</string>
+* &lt;kbd&gt;⌥&lt;/kbd&gt;&lt;kbd&gt;↩&lt;/kbd&gt; Reveal last image in the Finder.
+
+## Requirements
+
+- AWS CLI v2 (`/opt/homebrew/bin/aws`)
+- Python 3 (included with macOS)
+- Bedrock model access enabled in your AWS account</string>
 	<key>uidata</key>
 	<dict>
 		<key>002874FF-3AE4-4E8F-A4F8-65844E5D6CFB</key>
@@ -2355,22 +2349,68 @@ Query DALL·E via the `dalle` keyword.
 			<key>config</key>
 			<dict>
 				<key>default</key>
+				<string>us-east-1</string>
+				<key>pairs</key>
+				<array>
+					<array>
+						<string>US East (N. Virginia)</string>
+						<string>us-east-1</string>
+					</array>
+					<array>
+						<string>US East (Ohio)</string>
+						<string>us-east-2</string>
+					</array>
+					<array>
+						<string>US West (Oregon)</string>
+						<string>us-west-2</string>
+					</array>
+					<array>
+						<string>EU (Frankfurt)</string>
+						<string>eu-central-1</string>
+					</array>
+					<array>
+						<string>EU (Ireland)</string>
+						<string>eu-west-1</string>
+					</array>
+					<array>
+						<string>Asia Pacific (Tokyo)</string>
+						<string>ap-northeast-1</string>
+					</array>
+					<array>
+						<string>Asia Pacific (Sydney)</string>
+						<string>ap-southeast-2</string>
+					</array>
+				</array>
+			</dict>
+			<key>description</key>
+			<string>AWS region where Bedrock models are available.</string>
+			<key>label</key>
+			<string>AWS Region</string>
+			<key>type</key>
+			<string>popupbutton</string>
+			<key>variable</key>
+			<string>aws_region</string>
+		</dict>
+		<dict>
+			<key>config</key>
+			<dict>
+				<key>default</key>
 				<string></string>
 				<key>placeholder</key>
-				<string></string>
+				<string>Leave blank for default profile</string>
 				<key>required</key>
-				<true/>
+				<false/>
 				<key>trim</key>
 				<true/>
 			</dict>
 			<key>description</key>
-			<string>Get it at https://platform.openai.com/api-keys</string>
+			<string>AWS CLI profile name. Uses default credentials if blank (supports SSO, env vars, instance roles).</string>
 			<key>label</key>
-			<string>OpenAI API Key</string>
+			<string>AWS Profile</string>
 			<key>type</key>
 			<string>textfield</string>
 			<key>variable</key>
-			<string>openai_api_key</string>
+			<string>aws_profile</string>
 		</dict>
 		<dict>
 			<key>config</key>
@@ -2387,7 +2427,7 @@ Query DALL·E via the `dalle` keyword.
 			<key>description</key>
 			<string></string>
 			<key>label</key>
-			<string>ChatGPT Keyword</string>
+			<string>Chat Keyword</string>
 			<key>type</key>
 			<string>textfield</string>
 			<key>variable</key>
@@ -2416,67 +2456,59 @@ Query DALL·E via the `dalle` keyword.
 			<key>config</key>
 			<dict>
 				<key>default</key>
-				<string>gpt-5.4-nano</string>
+				<string>us.anthropic.claude-3-5-haiku-20241022-v1:0</string>
 				<key>pairs</key>
 				<array>
 					<array>
-						<string>GPT 5.4 nano</string>
-						<string>gpt-5.4-nano</string>
+						<string>Claude 3.5 Haiku (fast, cheap)</string>
+						<string>us.anthropic.claude-3-5-haiku-20241022-v1:0</string>
 					</array>
 					<array>
-						<string>GPT 5.4 mini</string>
-						<string>gpt-5.4-mini</string>
+						<string>Claude 3.5 Sonnet</string>
+						<string>us.anthropic.claude-3-5-sonnet-20241022-v2:0</string>
 					</array>
 					<array>
-						<string>GPT 5.4</string>
-						<string>gpt-5.4</string>
+						<string>Claude 4 Sonnet</string>
+						<string>us.anthropic.claude-sonnet-4-20250514-v1:0</string>
 					</array>
 					<array>
-						<string>GPT 4.1 nano</string>
-						<string>gpt-4.1-nano</string>
+						<string>Claude 4 Opus</string>
+						<string>us.anthropic.claude-opus-4-20250514-v1:0</string>
 					</array>
 					<array>
-						<string>GPT 4.1 mini</string>
-						<string>gpt-4.1-mini</string>
+						<string>Amazon Nova Micro (fastest, cheapest)</string>
+						<string>us.amazon.nova-micro-v1:0</string>
 					</array>
 					<array>
-						<string>GPT 4.1</string>
-						<string>gpt-4.1</string>
+						<string>Amazon Nova Lite</string>
+						<string>us.amazon.nova-lite-v1:0</string>
 					</array>
 					<array>
-						<string>GPT 4o mini</string>
-						<string>gpt-4o-mini</string>
+						<string>Amazon Nova Pro</string>
+						<string>us.amazon.nova-pro-v1:0</string>
 					</array>
 					<array>
-						<string>GPT 4o</string>
-						<string>gpt-4o</string>
+						<string>Llama 4 Scout (Meta)</string>
+						<string>us.meta.llama4-scout-17b-16e-instruct-v1:0</string>
 					</array>
 					<array>
-						<string>o1</string>
-						<string>o1</string>
+						<string>Llama 4 Maverick (Meta)</string>
+						<string>us.meta.llama4-maverick-17b-128e-instruct-v1:0</string>
 					</array>
 					<array>
-						<string>o3</string>
-						<string>o3</string>
-					</array>
-					<array>
-						<string>o3 mini</string>
-						<string>o3-mini</string>
-					</array>
-					<array>
-						<string>o4 mini</string>
-						<string>o4-mini</string>
+						<string>Mistral Large</string>
+						<string>mistral.mistral-large-2407-v1:0</string>
 					</array>
 				</array>
 			</dict>
 			<key>description</key>
-			<string></string>
+			<string>Choose a model based on cost vs. capability trade-off.</string>
 			<key>label</key>
-			<string>Model</string>
+			<string>Chat Model</string>
 			<key>type</key>
 			<string>popupbutton</string>
 			<key>variable</key>
-			<string>gpt_model</string>
+			<string>bedrock_model</string>
 		</dict>
 		<dict>
 			<key>config</key>
@@ -2541,7 +2573,7 @@ Query DALL·E via the `dalle` keyword.
 				<integer>3</integer>
 			</dict>
 			<key>description</key>
-			<string>Initial message to guide ChatGPT on the answers you expect. Supported on select models.</string>
+			<string>Initial message to guide the model. Supported on most Bedrock models.</string>
 			<key>label</key>
 			<string>System Prompt</string>
 			<key>type</key>
@@ -2553,7 +2585,7 @@ Query DALL·E via the `dalle` keyword.
 			<key>config</key>
 			<dict>
 				<key>default</key>
-				<string>dalle</string>
+				<string>imagine</string>
 				<key>placeholder</key>
 				<string></string>
 				<key>required</key>
@@ -2564,7 +2596,7 @@ Query DALL·E via the `dalle` keyword.
 			<key>description</key>
 			<string></string>
 			<key>label</key>
-			<string>DALL·E Keyword</string>
+			<string>Image Keyword</string>
 			<key>type</key>
 			<string>textfield</string>
 			<key>variable</key>
@@ -2574,7 +2606,7 @@ Query DALL·E via the `dalle` keyword.
 			<key>config</key>
 			<dict>
 				<key>default</key>
-				<string>~/Desktop/DALL-E</string>
+				<string>~/Desktop/Bedrock-Images</string>
 				<key>filtermode</key>
 				<integer>1</integer>
 				<key>placeholder</key>
@@ -2585,7 +2617,7 @@ Query DALL·E via the `dalle` keyword.
 			<key>description</key>
 			<string></string>
 			<key>label</key>
-			<string>Save Folder</string>
+			<string>Image Save Folder</string>
 			<key>type</key>
 			<string>filepicker</string>
 			<key>variable</key>
@@ -2614,12 +2646,16 @@ Query DALL·E via the `dalle` keyword.
 			<key>config</key>
 			<dict>
 				<key>default</key>
-				<string>dall-e-3</string>
+				<string>amazon.nova-canvas-v1:0</string>
 				<key>pairs</key>
 				<array>
 					<array>
-						<string>DALL·E 3</string>
-						<string>dall-e-3</string>
+						<string>Amazon Nova Canvas</string>
+						<string>amazon.nova-canvas-v1:0</string>
+					</array>
+					<array>
+						<string>Stability SDXL 1.0</string>
+						<string>stability.stable-diffusion-xl-v1</string>
 					</array>
 				</array>
 			</dict>
@@ -2630,33 +2666,7 @@ Query DALL·E via the `dalle` keyword.
 			<key>type</key>
 			<string>popupbutton</string>
 			<key>variable</key>
-			<string>dalle_model</string>
-		</dict>
-		<dict>
-			<key>config</key>
-			<dict>
-				<key>default</key>
-				<string>vivid</string>
-				<key>pairs</key>
-				<array>
-					<array>
-						<string>Vivid</string>
-						<string>vivid</string>
-					</array>
-					<array>
-						<string>Natural</string>
-						<string>natural</string>
-					</array>
-				</array>
-			</dict>
-			<key>description</key>
-			<string></string>
-			<key>label</key>
-			<string>Style</string>
-			<key>type</key>
-			<string>popupbutton</string>
-			<key>variable</key>
-			<string>dalle_style</string>
+			<string>image_model</string>
 		</dict>
 		<dict>
 			<key>config</key>
@@ -2670,50 +2680,25 @@ Query DALL·E via the `dalle` keyword.
 						<string>standard</string>
 					</array>
 					<array>
-						<string>High Definition</string>
-						<string>hd</string>
+						<string>Premium</string>
+						<string>premium</string>
 					</array>
 				</array>
 			</dict>
 			<key>description</key>
-			<string>Lower quality images cost less.</string>
+			<string>Higher quality images may cost more.</string>
 			<key>label</key>
-			<string>Quality</string>
+			<string>Image Quality</string>
 			<key>type</key>
 			<string>popupbutton</string>
 			<key>variable</key>
-			<string>dalle_quality</string>
-		</dict>
-		<dict>
-			<key>config</key>
-			<dict>
-				<key>default</key>
-				<string></string>
-				<key>placeholder</key>
-				<string>Optional OpenAI Organisation Identifier</string>
-				<key>required</key>
-				<false/>
-				<key>trim</key>
-				<true/>
-			</dict>
-			<key>description</key>
-			<string>Get it at https://platform.openai.com/account/organization</string>
-			<key>label</key>
-			<string>Organisation ID</string>
-			<key>type</key>
-			<string>textfield</string>
-			<key>variable</key>
-			<string>openai_org_id</string>
+			<string>image_quality</string>
 		</dict>
 	</array>
 	<key>variables</key>
 	<dict>
-		<key>chatgpt_api_endpoint</key>
-		<string>https://api.openai.com/v1/chat/completions</string>
 		<key>chatgpt_model_override</key>
 		<string></string>
-		<key>dalle_api_endpoint</key>
-		<string>https://api.openai.com/v1/images/generations</string>
 	</dict>
 	<key>version</key>
 	<string>26.1</string>

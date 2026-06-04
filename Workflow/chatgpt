@@ -58,37 +58,148 @@ function markdownChat(messages, ignoreLastInterrupted = true) {
   }, "")
 }
 
-function startStream(apiEndpoint, apiKey, apiOrgHeader, model, systemPrompt, contextChat, streamFile, pidStreamFile, timeoutSeconds) {
+// Read a big-endian uint32 from NSData at the given byte offset
+function readUInt32BE(nsData, offset) {
+  const sub = nsData.subdataWithRange($.NSMakeRange(offset, 4))
+  const desc = sub.description.js
+  const match = desc.match(/0x([0-9a-f]+)/i)
+  if (!match) return 0
+  return parseInt(match[1], 16)
+}
+
+// Parse Bedrock event stream binary format and extract text content
+function parseEventStream(nsData) {
+  const dataLength = nsData.length
+  let offset = 0
+  let text = ""
+  let stopReason = null
+
+  while (offset + 12 <= dataLength) {
+    // Each frame: 4-byte total length, 4-byte headers length, 4-byte prelude CRC
+    const totalLen = readUInt32BE(nsData, offset)
+
+    // Sanity checks
+    if (totalLen < 16 || totalLen > 1048576) break
+    if (offset + totalLen > dataLength) break // Incomplete frame, stream still in progress
+
+    const headersLen = readUInt32BE(nsData, offset + 4)
+
+    // Payload starts after prelude (12 bytes) + headers
+    const payloadOffset = offset + 12 + headersLen
+    // Payload length = totalLen - prelude(12) - headers - message CRC(4)
+    const payloadLen = totalLen - 12 - headersLen - 4
+
+    if (payloadLen > 0 && payloadOffset + payloadLen <= dataLength) {
+      const payloadData = nsData.subdataWithRange($.NSMakeRange(payloadOffset, payloadLen))
+      const payloadStr = $.NSString.alloc.initWithDataEncoding(payloadData, $.NSUTF8StringEncoding)
+
+      if (payloadStr) {
+        try {
+          const event = JSON.parse(payloadStr.js)
+
+          // Extract text from contentBlockDelta events
+          if (event.contentBlockDelta && event.contentBlockDelta.delta && event.contentBlockDelta.delta.text) {
+            text += event.contentBlockDelta.delta.text
+          }
+
+          // Detect stream completion via messageStop
+          if (event.messageStop) {
+            stopReason = event.messageStop.stopReason || "end_turn"
+          }
+
+          // Detect errors
+          if (event.internalServerException || event.modelStreamErrorException ||
+              event.validationException || event.throttlingException ||
+              event.serviceUnavailableException) {
+            const errKey = Object.keys(event).find(k => k.includes("xception") || k.includes("Exception"))
+            if (errKey) {
+              return { text: "", error: event[errKey].message || JSON.stringify(event[errKey]), stopReason: "error" }
+            }
+          }
+        } catch(e) {
+          // Not valid JSON payload, skip this frame
+        }
+      }
+    }
+
+    offset += totalLen
+  }
+
+  return { text: text, error: null, stopReason: stopReason }
+}
+
+function startStream(region, profile, model, systemPrompt, contextChat, streamFile, pidStreamFile, bodyFile, timeoutSeconds) {
   $.NSFileManager.defaultManager.createFileAtPathContentsAttributes(streamFile, undefined, undefined) // Create empty file
 
-  const messages = systemPrompt ?
-    [{ role: "system", content: systemPrompt }].concat(contextChat) :
-    contextChat
+  // Build Bedrock Converse messages format
+  const messages = contextChat.map(msg => ({
+    role: msg.role,
+    content: [{ text: msg.content }]
+  }))
+
+  const body = { messages: messages }
+  if (systemPrompt) {
+    body.system = [{ text: systemPrompt }]
+  }
+
+  // Write the request body to a temp file to avoid shell escaping issues
+  writeFile(bodyFile, JSON.stringify(body))
+
+  const endpoint = `https://bedrock-runtime.${region}.amazonaws.com/model/${encodeURIComponent(model)}/converse-stream`
+  const profileArg = profile ? `--profile ${profile}` : ""
+
+  // Shell script: get credentials, then curl with SigV4 signing, write raw binary to stream file
+  const shellScript = [
+    '#!/bin/zsh',
+    'export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:$PATH"',
+    '',
+    '# Get AWS credentials',
+    `eval "$(aws configure export-credentials --format env ${profileArg} 2>/dev/null)"`,
+    '',
+    '# Validate credentials were obtained',
+    'if [ -z "$AWS_ACCESS_KEY_ID" ] || [ -z "$AWS_SECRET_ACCESS_KEY" ]; then',
+    `  echo '{"error":"AWS credentials not found. Run aws configure or aws sso login."}' > "${streamFile}"`,
+    '  exit 1',
+    'fi',
+    '',
+    '# Build curl command with SigV4 auth',
+    `CURL_ARGS=("${endpoint}")`,
+    `CURL_ARGS+=(--speed-limit 0 --speed-time ${timeoutSeconds})`,
+    'CURL_ARGS+=(--silent --no-buffer)',
+    'CURL_ARGS+=(--header "Content-Type: application/json")',
+    `CURL_ARGS+=(--aws-sigv4 "aws:amz:${region}:bedrock")`,
+    'CURL_ARGS+=(--user "$AWS_ACCESS_KEY_ID:$AWS_SECRET_ACCESS_KEY")',
+    '',
+    '# Add session token header if present (SSO / assumed roles)',
+    'if [ -n "$AWS_SESSION_TOKEN" ]; then',
+    '  CURL_ARGS+=(--header "X-Amz-Security-Token: $AWS_SESSION_TOKEN")',
+    'fi',
+    '',
+    `CURL_ARGS+=(--data @"${bodyFile}")`,
+    `CURL_ARGS+=(--output "${streamFile}")`,
+    '',
+    'curl "${CURL_ARGS[@]}"',
+    `rm -f "${bodyFile}"`
+  ].join('\n')
+
+  const shellFile = `${envVar("alfred_workflow_cache")}/stream_cmd.sh`
+  writeFile(shellFile, shellScript)
 
   const task = $.NSTask.alloc.init
   const stdout = $.NSPipe.pipe
 
-  task.executableURL = $.NSURL.fileURLWithPath("/usr/bin/curl")
-  task.arguments = [
-    apiEndpoint,
-    "--speed-limit", "0", "--speed-time", timeoutSeconds.toString(), // Abort stalled connection after a few seconds
-    "--silent", "--no-buffer",
-    "--header", "Content-Type: application/json",
-    "--header", `Authorization: Bearer ${apiKey}`,
-    "--data", JSON.stringify({ model: model, messages: messages, stream: true }),
-    "--output", streamFile
-  ].concat(apiOrgHeader)
-
+  task.executableURL = $.NSURL.fileURLWithPath("/bin/zsh")
+  task.arguments = [shellFile]
   task.standardOutput = stdout
+  task.standardError = $.NSPipe.pipe
   task.launchAndReturnError(false)
   writeFile(pidStreamFile, task.processIdentifier.toString())
 }
 
 function readStream(streamFile, chatFile, pidStreamFile, timeoutSeconds) {
   const streamMarker = envVar("stream_marker") === "1"
-  const streamString = $.NSString.stringWithContentsOfFileEncodingError(streamFile, $.NSUTF8StringEncoding, undefined).js
 
-  // When starting a stream or continuing from a closed window, add a marker to determine the location of future replacements
+  // When starting a stream or continuing from a closed window, add a marker
   if (streamMarker) return JSON.stringify({
     rerun: 0.1,
     variables: { streaming_now: true },
@@ -96,72 +207,123 @@ function readStream(streamFile, chatFile, pidStreamFile, timeoutSeconds) {
     behaviour: { response: "append" }
   })
 
-  // If response looks like proper JSON, it is probably an error
-  if (streamString.startsWith("{")) {
-    try {
-      const errorMessage = JSON.parse(streamString)["error"]["message"]
+  // Read the stream file as raw binary data
+  const nsData = $.NSData.dataWithContentsOfFile(streamFile)
 
-      if (errorMessage) {
-        // Delete stream files
+  // If file is empty or doesn't exist yet, loop
+  if (!nsData || nsData.length === 0) return JSON.stringify({
+    rerun: 0.1,
+    variables: { streaming_now: true }
+  })
+
+  // Check if there's a JSON error message (credentials issue, etc.)
+  // This happens when our shell script writes an error JSON directly
+  const rawStr = $.NSString.alloc.initWithDataEncoding(nsData, $.NSUTF8StringEncoding)
+  if (rawStr) {
+    const rawJS = rawStr.js
+    if (rawJS.startsWith('{"error"')) {
+      try {
+        const parsed = JSON.parse(rawJS)
+        if (parsed.error) {
+          deleteFile(streamFile)
+          deleteFile(pidStreamFile)
+          return JSON.stringify({
+            response: parsed.error,
+            behaviour: { response: "replacelast" }
+          })
+        }
+      } catch(e) {}
+    }
+    // Also check for Bedrock HTTP error responses (plain JSON with "message" field)
+    if (rawJS.startsWith('{"message"') || rawJS.startsWith('{"Message"')) {
+      try {
+        const parsed = JSON.parse(rawJS)
+        const errMsg = parsed.message || parsed.Message || "Unknown Bedrock error"
         deleteFile(streamFile)
         deleteFile(pidStreamFile)
-
         return JSON.stringify({
-          response: errorMessage,
+          response: errMsg,
           behaviour: { response: "replacelast" }
         })
-      }
-
-      throw "Could not determine error message" // Fallback to the catch
-    } catch {
-      // If it's not an error from the API, log file contents
-      console.log(streamString)
-
-      return JSON.stringify({
-        response: streamString,
-        behaviour: { response: "replacelast" }
-      })
+      } catch(e) {}
     }
   }
 
-  // Parse streaming response
-  const chunks = streamString
-    .split("\n") // Split into lines
-    .filter(item => item) // Remove empty lines
-    .map(item => item.replace(/^data: /, "")) // Remove extraneous "data: "
-    .flatMap(item => { try { return JSON.parse(item) } catch { return [] } }) // Parse as JSON
+  // Parse the binary event stream
+  const result = parseEventStream(nsData)
 
-  const responseText = chunks.map(item => item["choices"][0]?.["delta"]["content"]).join("")
-  const finishReason = chunks.slice(-1)[0]?.["choices"][0]["finish_reason"]
+  // Handle parse errors
+  if (result.error) {
+    deleteFile(streamFile)
+    deleteFile(pidStreamFile)
+    return JSON.stringify({
+      response: result.error,
+      behaviour: { response: "replacelast" }
+    })
+  }
 
-  // If reponse is not finished
-  if (!finishReason) {
-    // If File not modified for over a few seconds, connection stalled
+  const responseText = result.text
+
+  // If stream is complete (messageStop received)
+  if (result.stopReason) {
+    appendChat(chatFile, { role: "assistant", content: responseText })
+    deleteFile(streamFile)
+    deleteFile(pidStreamFile)
+
+    const footerText = (function() {
+      switch (result.stopReason) {
+        case "max_tokens": return "Maximum number of tokens reached"
+        case "content_filtered": return "Content was omitted due to content filters"
+      }
+    })()
+
+    return JSON.stringify({
+      response: responseText,
+      footer: footerText,
+      behaviour: { response: "replacelast", scroll: "end" }
+    })
+  }
+
+  // Stream not complete — check if process is still alive
+  const pidStr = $.NSString.stringWithContentsOfFileEncodingError(pidStreamFile, $.NSUTF8StringEncoding, undefined)
+  let processRunning = false
+  if (pidStr) {
+    const checkTask = $.NSTask.alloc.init
+    checkTask.executableURL = $.NSURL.fileURLWithPath("/bin/kill")
+    checkTask.arguments = ["-0", pidStr.js.trim()]
+    checkTask.standardOutput = $.NSPipe.pipe
+    checkTask.standardError = $.NSPipe.pipe
+    try {
+      checkTask.launchAndReturnError(false)
+      checkTask.waitUntilExit
+      processRunning = checkTask.terminationStatus === 0
+    } catch(e) {
+      processRunning = false
+    }
+  }
+
+  if (processRunning) {
+    // Check for stalled connection
     const stalled = new Date().getTime() - fileModified(streamFile) > timeoutSeconds * 1000
 
-    if (stalled) {
-      // Write incomplete response
-      if (responseText.length > 0) appendChat(chatFile, { role: "assistant", content: responseText })
-
-      // Delete stream files
+    if (stalled && responseText.length > 0) {
+      appendChat(chatFile, { role: "assistant", content: responseText })
       deleteFile(streamFile)
       deleteFile(pidStreamFile)
-
-      // Stop
       return JSON.stringify({
         response: `${responseText} [Connection Stalled]`,
-        footer: "You can ask ChatGPT to continue the answer",
+        footer: "You can ask to continue the answer",
         behaviour: { response: "replacelast", scroll: "end" }
       })
     }
 
-    // If file is empty, we were too fast and will try again on next loop
-    if (streamString.length === 0) return JSON.stringify({
+    // If no text yet, keep waiting
+    if (responseText.length === 0) return JSON.stringify({
       rerun: 0.1,
       variables: { streaming_now: true }
     })
 
-    // Continue loop
+    // Text is coming in, show progress
     return JSON.stringify({
       rerun: 0.1,
       variables: { streaming_now: true },
@@ -170,43 +332,40 @@ function readStream(streamFile, chatFile, pidStreamFile, timeoutSeconds) {
     })
   }
 
-  // When finished, write history and delete stream files
+  // Process ended without a messageStop — might be incomplete or error
+  if (responseText.length === 0) {
+    deleteFile(streamFile)
+    deleteFile(pidStreamFile)
+    return JSON.stringify({
+      response: "Error: No response received. Check your AWS credentials, region, and that the model is enabled in Bedrock.",
+      behaviour: { response: "replacelast" }
+    })
+  }
+
+  // Process ended with some text but no formal stop — save what we have
   appendChat(chatFile, { role: "assistant", content: responseText })
   deleteFile(streamFile)
   deleteFile(pidStreamFile)
 
-  // Mention finish reason in footer
-  const footerText = (function() {
-    switch (finishReason) {
-      case "length": return "Maximum number of tokens reached"
-      case "content_filter": return "Content was omitted due to a flag from OpenAI content filters"
-    }
-  })()
-
-  // Stop
   return JSON.stringify({
     response: responseText,
-    footer: footerText,
     behaviour: { response: "replacelast", scroll: "end" }
   })
 }
 
 // Main
 function run(argv) {
-  // Constant data
   const typedQuery = argv[0]
   const maxContext = parseInt(envVar("max_context"))
   const timeoutSeconds = parseInt(envVar("timeout_seconds"))
-  const apiKey = envVar("openai_api_key")
-  const apiOrgHeader = envVar("openai_org_id") ? ["--header", `OpenAI-Organization: ${envVar("openai_org_id")}`] : []
-  const apiEndpointInit = envVar("chatgpt_api_endpoint") || "https://api.openai.com/v1/chat/completions"
-  const apiEndpointInitHasPath = apiEndpointInit.replace(/^https?:\/\//, "").includes("/")
-  const apiEndpoint = apiEndpointInitHasPath ? apiEndpointInit : `${apiEndpointInit}/v1/chat/completions`
+  const region = envVar("aws_region") || "us-east-1"
+  const profile = envVar("aws_profile") || ""
   const systemPrompt = envVar("system_prompt")
-  const model = envVar("chatgpt_model_override") ? envVar("chatgpt_model_override") : envVar("gpt_model")
+  const model = envVar("chatgpt_model_override") ? envVar("chatgpt_model_override") : envVar("bedrock_model")
   const chatFile = `${envVar("alfred_workflow_data")}/chat.json`
   const pidStreamFile = `${envVar("alfred_workflow_cache")}/pid.txt`
-  const streamFile = `${envVar("alfred_workflow_cache")}/stream.txt`
+  const streamFile = `${envVar("alfred_workflow_cache")}/stream.bin`
+  const bodyFile = `${envVar("alfred_workflow_cache")}/body.json`
   const streamingNow = envVar("streaming_now") === "1"
 
   // If continually reading from a stream, continue that loop
@@ -216,7 +375,6 @@ function run(argv) {
   const previousChat = readChat(chatFile)
 
   // If "streaming_now" is unset but stream file exists, the window was closed mid-stream
-  // Reload conversation and rerun to resume stream
   if (fileExists(streamFile)) return JSON.stringify({
     rerun: 0.1,
     variables: { streaming_now: true, stream_marker: true },
@@ -236,7 +394,7 @@ function run(argv) {
   const contextChat = ongoingChat.slice(-maxContext)
 
   // Make API request, write chat file, and start loop
-  startStream(apiEndpoint, apiKey, apiOrgHeader, model, systemPrompt, contextChat, streamFile, pidStreamFile, timeoutSeconds)
+  startStream(region, profile, model, systemPrompt, contextChat, streamFile, pidStreamFile, bodyFile, timeoutSeconds)
   appendChat(chatFile, appendQuery)
 
   return JSON.stringify({
